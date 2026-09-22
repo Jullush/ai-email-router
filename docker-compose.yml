@@ -1,0 +1,52 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: router_ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: router_ollama_init
+    depends_on:
+      - ollama
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for Ollama model';
+      while ! curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done;
+      echo 'Downloading llama3.2:3b...';
+      curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"llama3.2:3b\"}';
+      echo 'Model already here!';
+      "
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    platform: linux/amd64
+    container_name: router_mailhog
+    ports:
+      - "8025:8025" #Web panel
+      - "1025:1025" #Server SMTP
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: router_api
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - MODEL_NAME=llama3.2:3b
+    depends_on:
+      - ollama-init
+      - mailhog
+    restart: unless-stopped
+
+volumes:
+  ollama_data:

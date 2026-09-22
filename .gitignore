@@ -1,0 +1,19 @@
+# Sekrety
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE i system
+.idea/
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
