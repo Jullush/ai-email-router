@@ -44,8 +44,10 @@ services:
       - SMTP_PORT=1025
       - MODEL_NAME=llama3.2:3b
     depends_on:
-      - ollama-init
-      - mailhog
+      ollama-init:
+        condition: service_completed_successfully
+      mailhog:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

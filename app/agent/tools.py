@@ -1,3 +1,4 @@
+"""Tools available to the routing agent."""
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, ConfigDict
 
@@ -5,25 +6,24 @@ from app.core.logger import get_logger
 from app.models.models import Department
 from app.services.mail_service import MailService
 
-mail_service = MailService()
-
 log = get_logger(__name__)
 
 
 class EmailContext(BaseModel):
-    """Request data injected at runtime, so the LLM wouldn't be able to change it."""
-    model_config = ConfigDict(frozen=True)
+    """Request data and services injected at runtime, so the LLM can't change them."""
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
     sender: str
     message: str
+    mail_service: MailService
 
 
 @tool("send_email", return_direct=True)
 def send_email(recipient: Department, runtime: ToolRuntime[EmailContext]) -> str:
-    """Routes the incoming email to the selected dept."""
+    """Forward the incoming message to the selected department."""
     recipient_address = Department(recipient).value
     log.info("Email tool invoked for recipient %s", recipient_address)
 
-    mail_service.send_email(
+    runtime.context.mail_service.send_email(
         recipient=recipient_address,
         sender=runtime.context.sender,
         message=runtime.context.message,

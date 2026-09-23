@@ -1,7 +1,12 @@
+"""Logging setup shared across the app."""
 import logging
 import sys
 
 def get_logger(name: str = __name__, level: int = logging.INFO) -> logging.Logger:
+    """Return a logger that writes formatted records to stdout.
+
+    Safe to call repeatedly: handlers are attached only once per logger name.
+    """
 
     logger = logging.getLogger(name)
 

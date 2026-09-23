@@ -36,8 +36,31 @@ The system runs as a set of Docker containers, ensuring operational isolation an
    - Evaluates message semantics against departmental guidelines.
    - Calls the `send_email` tool, where the LLM chooses **only** the target department (constrained to the `Department` enum).
    - The sender address and message body are injected from the original request via LangChain's runtime context, so the LLM cannot alter or spoof them — the message is forwarded verbatim.
-   - Validates execution results via `RoutingResult`: a request is reported as routed only if the tool call actually succeeded.
+   - Validates execution results via `RoutingResult`: a request is reported as routed only if the tool call actually succeeded. If the LLM picks no valid department, the message goes to the fallback inbox (`other@example.com`) and the result is marked `fallback=True`. If Ollama itself is down, nothing is sent and the API returns `503`.
 3. **Mail Dispatcher & Testing Server (SMTP & MailHog):** Sends routed messages over standard SMTP while preserving the original sender address in the `Reply-To` header, captured by the MailHog test mailbox.
+
+### Agent Flow
+
+`create_agent` compiles the agent into a LangGraph state graph. A single request flows through it as follows:
+
+```mermaid
+flowchart TD
+    start([Request]) --> model["LLM<br/><i>classify message</i>"]
+    model --> limit{"Tool call limit<br/><i>max 1 send_email</i>"}
+    limit -- "tool call" --> tools["send_email tool<br/><i>forward via SMTP</i>"]
+    model -. "Ollama error / timeout" .-> unavailable([HTTP 503, nothing sent])
+    limit -- "no tool call" --> fallback([Fallback: other@example.com])
+    tools -- "success<br/>(return_direct)" --> done([Routed to department])
+    tools -. "invalid department<br/>(return_direct)" .-> fallback
+    tools -. "SMTP error" .-> unavailable
+```
+
+- The **LLM** sees only the message body and chooses the department.
+- The **tool call limit** (`ToolCallLimitMiddleware`) blocks any extra `send_email` call, so a request never sends more than one email.
+- The **tool** receives the sender and original body from runtime context, not from the LLM, so they are forwarded unchanged.
+- Because `send_email` is `return_direct`, the graph ends after the tool runs even if it failed (e.g. invalid department), so the model never retries.
+- The **fallback** step runs in `RoutingAgent.process()` after the graph: a message the model couldn't classify is sent to `other@example.com`.
+- **Infrastructure failures** (Ollama or SMTP down) send nothing and return `503`, so misrouted mail never piles up in the fallback inbox.
 
 ### Project Structure
 
@@ -164,8 +187,10 @@ curl -X POST http://localhost:8000/api/v1/messages \
 
 | Status | When |
 | :--- | :--- |
-| `422 Unprocessable Entity` | Invalid payload (bad email, message shorter than 3 or longer than 5000 characters), or the model failed to route the message |
-| `500 Internal Server Error` | Unexpected failure, e.g. Ollama or the SMTP server is unreachable |
+| `200 OK` | Message delivered — to the chosen department, or to the fallback inbox `other@example.com` if the model couldn't classify it |
+| `422 Unprocessable Entity` | Invalid payload (bad email, message shorter than 3 or longer than 5000 characters) |
+| `503 Service Unavailable` | Ollama (`LLM unavailable`) or the SMTP server (`Mail server unavailable`) is down or timed out. Nothing is sent — retry later |
+| `500 Internal Server Error` | Any other unexpected failure |
 
 ---
 

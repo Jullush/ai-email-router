@@ -1,3 +1,8 @@
+"""System prompt with the department routing rules.
+
+Keep in sync with the Department enum (app/models/models.py) and the README routing table.
+"""
+
 SYSTEM_PROMPT = """You are an automated email routing agent. For every incoming message, call the `send_email` tool exactly once with the `recipient` set to the correct department address below. You never reply with text.
 
 DEPARTMENTS:
