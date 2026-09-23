@@ -1,14 +1,14 @@
 # AI Email Router PoC
 
-A production-grade Proof of Concept (PoC) that serves as an intelligent email router. The system processes non-deterministic user queries, 
-evaluates sender intent using a locally hosted Large Language Model (LLM via Ollama), 
-and autonomously dispatches tickets to the appropriate department using AI Agent Tool Calling mechanisms.
+Proof of Concept (PoC) that serves as an intelligent email router. The system processes free-form user messages,
+classifies their intent using a locally hosted Large Language Model (LLM via Ollama),
+and forwards each message to the appropriate department using AI Agent Tool Calling.
 
 ---
 
 ## Architecture Overview
 
-The system is designed as a containerized microservice architecture ensuring operational isolation, determinism, and data privacy by hosting the LLM locally.
+The system runs as a set of Docker containers, ensuring operational isolation and data privacy by hosting the LLM locally.
 
 ```
 +------------------+      POST /api/v1/messages       +----------------------+
@@ -34,9 +34,27 @@ The system is designed as a containerized microservice architecture ensuring ope
 2. **AI Agent Core (LangChain & Ollama):**
    - Utilizes `llama3.2:3b` executing inside a dedicated container.
    - Evaluates message semantics against departmental guidelines.
-   - Executes autonomous function calling (`send_email` tool) with deterministic argument binding.
-   - Validates execution results via `RoutingResult` to prevent false-positive acknowledgments.
+   - Calls the `send_email` tool, where the LLM chooses **only** the target department (constrained to the `Department` enum).
+   - The sender address and message body are injected from the original request via LangChain's runtime context, so the LLM cannot alter or spoof them — the message is forwarded verbatim.
+   - Validates execution results via `RoutingResult`: a request is reported as routed only if the tool call actually succeeded.
 3. **Mail Dispatcher & Testing Server (SMTP & MailHog):** Sends routed messages over standard SMTP while preserving the original sender address in the `Reply-To` header, captured by the MailHog test mailbox.
+
+### Project Structure
+
+```
+app/
+├── main.py              # FastAPI app, health check
+├── api/routes.py        # POST /api/v1/messages
+├── agent/
+│   ├── agent.py         # RoutingAgent: LLM setup, invocation, result validation
+│   ├── tools.py         # send_email tool + EmailContext (runtime-injected request data)
+│   └── prompts.py       # System prompt with routing rules
+├── core/
+│   ├── config.py        # Settings (env vars / .env)
+│   └── logger.py        # Logging setup
+├── models/models.py     # Pydantic models, Department enum
+└── services/mail_service.py  # SMTP sending
+```
 
 ---
 
@@ -44,11 +62,13 @@ The system is designed as a containerized microservice architecture ensuring ope
 
 | Department | Target Recipient | Scope & Responsibility |
 | :--- | :--- | :--- |
-| **IT Support** | `it@example.com` | Hardware failures, network infrastructure, software provisioning |
-| **Help Desk** | `help-desk@example.com` | Account management, system credentials, password resets, access grants |
-| **Human Resources** | `human-resources@example.com` | Recruitment, leave requests, employee relations, company benefits |
-| **Payroll & Personnel** | `kadry@example.com` | Salaries, contracts, tax declarations, employment certificates |
-| **Fallback (Other)** | `other@example.com` | Uncategorized inquiries, cross-functional topics, ambiguous requests |
+| **IT Support** | `it@example.com` | Hardware and printer issues, network/VPN connectivity, software installation and troubleshooting |
+| **Help Desk** | `help-desk@example.com` | Password resets, account lockouts, account access issues |
+| **Human Resources** | `human-resources@example.com` | Recruitment and hiring, vacation/PTO and leave requests |
+| **Payroll & Personnel** | `kadry@example.com` | Payroll and salary inquiries, employment contracts, tax documents, HR paperwork |
+| **Fallback (Other)** | `other@example.com` | Anything that doesn't clearly fit above, or ambiguous requests |
+
+The routing rules live in `app/agent/prompts.py` — keep this table in sync when changing them.
 
 ---
 
@@ -72,6 +92,8 @@ The orchestration setup automatically:
 - Starts the **MailHog** SMTP server and Web UI.
 - Builds and runs the **FastAPI** application container.
 
+> **Note:** On the first start the model (~2 GB) is downloaded in the background. Requests will fail until it finishes — follow progress with `docker compose logs -f ollama-init`.
+
 ---
 
 ## Service Endpoints & Interfaces
@@ -81,7 +103,7 @@ The orchestration setup automatically:
 | **Swagger UI** | [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs) | Interactive API exploration and test client |
 | **OpenAPI Specification** | [http://localhost:8000/api/v1/openapi.json](http://localhost:8000/api/v1/openapi.json) | Raw OpenAPI schema JSON |
 | **MailHog Web UI** | [http://localhost:8025](http://localhost:8025) | Webmail console for inspecting routed emails |
-| **Health Check** | [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health) | Service operational status endpoint |
+| **Health Check** | [http://localhost:8000/health](http://localhost:8000/health) | Service operational status endpoint |
 
 ---
 
@@ -138,6 +160,13 @@ curl -X POST http://localhost:8000/api/v1/messages \
   }'
 ```
 
+### Error Responses
+
+| Status | When |
+| :--- | :--- |
+| `422 Unprocessable Entity` | Invalid payload (bad email, message shorter than 3 or longer than 5000 characters), or the model failed to route the message |
+| `500 Internal Server Error` | Unexpected failure, e.g. Ollama or the SMTP server is unreachable |
+
 ---
 
 ## Inspecting Dispatched Emails
@@ -153,7 +182,7 @@ curl -X POST http://localhost:8000/api/v1/messages \
 
 ## Local Development (Without Full Dockerization)
 
-To run the API locally with hot-reloading for rapid iteration:
+To run the API locally with hot-reloading for rapid iteration (requires Python 3.11+ and [uv](https://docs.astral.sh/uv/)):
 
 1. **Install dependencies:**
    ```bash
@@ -165,7 +194,14 @@ To run the API locally with hot-reloading for rapid iteration:
    docker compose up -d ollama ollama-init mailhog
    ```
 
-3. **Run development server:**
+3. **Point the app at localhost.** The defaults in `app/core/config.py` use Docker service hostnames (`ollama`, `mailhog`), which don't resolve outside Docker. Create a `.env` file in the project root:
+   ```env
+   OLLAMA_HOST=http://localhost:11434
+   SMTP_HOST=localhost
+   SMTP_PORT=1025
+   ```
+
+4. **Run development server:**
    ```bash
    uv run uvicorn app.main:app --reload --port 8000
    ```
