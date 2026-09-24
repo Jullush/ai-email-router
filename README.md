@@ -30,14 +30,14 @@ The system runs as a set of Docker containers, ensuring operational isolation an
 
 ### Core Components
 
-1. **API Layer (FastAPI & Pydantic):** Ingests incoming HTTP requests (`POST /api/v1/messages`), validates payload schema (`email`, `message`), and hosts interactive OpenAPI/Swagger documentation.
+1. **API Layer (FastAPI & Pydantic):** Ingests incoming HTTP requests (`POST /api/v1/messages`), validates payload schema (`email`, `subject`, `message`), and hosts interactive OpenAPI/Swagger documentation.
 2. **AI Agent Core (LangChain & Ollama):**
    - Utilizes `llama3.2:3b` executing inside a dedicated container.
-   - Evaluates message semantics against departmental guidelines.
+   - Evaluates message semantics against departmental guidelines (only the message body is shown to the LLM; the subject is not used for classification).
    - Calls the `send_email` tool, where the LLM chooses **only** the target department (constrained to the `Department` enum).
-   - The sender address and message body are injected from the original request via LangChain's runtime context, so the LLM cannot alter or spoof them — the message is forwarded verbatim.
-   - Validates execution results via `RoutingResult`: a request is reported as routed only if the tool call actually succeeded. If the LLM picks no valid department, the message goes to the fallback inbox (`other@example.com`) and the result is marked `fallback=True`. If Ollama itself is down, nothing is sent and the API returns `503`.
-3. **Mail Dispatcher & Testing Server (SMTP & MailHog):** Sends routed messages over standard SMTP while preserving the original sender address in the `Reply-To` header, captured by the MailHog test mailbox.
+   - The sender address, subject and message body are injected from the original request via LangChain's runtime context, so the LLM cannot alter or spoof them — the message is forwarded verbatim.
+   - Validates execution results via `RoutingResult`: a request is reported as routed only if the tool call actually succeeded. If the LLM picks no valid department, the message goes to the fallback inbox (`other@example.com`) and the result is marked `fallback=True`. If Ollama itself is unreachable, times out or returns an error, nothing is sent and the API returns `503`.
+3. **Mail Dispatcher & Testing Server (SMTP & MailHog):** Sends routed messages over standard SMTP with the subject `[Routed] Subject:<original subject>` and the original sender address in the `Reply-To` header, captured by the MailHog test mailbox.
 
 ### Agent Flow
 
@@ -57,10 +57,10 @@ flowchart TD
 
 - The **LLM** sees only the message body and chooses the department.
 - The **tool call limit** (`ToolCallLimitMiddleware`) blocks any extra `send_email` call, so a request never sends more than one email.
-- The **tool** receives the sender and original body from runtime context, not from the LLM, so they are forwarded unchanged.
+- The **tool** receives the sender, subject and original body from runtime context, not from the LLM, so they are forwarded unchanged.
 - Because `send_email` is `return_direct`, the graph ends after the tool runs even if it failed (e.g. invalid department), so the model never retries.
 - The **fallback** step runs in `RoutingAgent.process()` after the graph: a message the model couldn't classify is sent to `other@example.com`.
-- **Infrastructure failures** (Ollama or SMTP down) send nothing and return `503`, so misrouted mail never piles up in the fallback inbox.
+- **Infrastructure failures** (Ollama or SMTP down) send nothing and return `503`, so misrouted mail never piles up in the fallback inbox. This also applies to the fallback send: if SMTP fails there, the API returns `503`.
 
 ### Project Structure
 
@@ -115,7 +115,7 @@ The orchestration setup automatically:
 - Starts the **MailHog** SMTP server and Web UI.
 - Builds and runs the **FastAPI** application container.
 
-> **Note:** On the first start the model (~2 GB) is downloaded in the background. Requests will fail until it finishes — follow progress with `docker compose logs -f ollama-init`.
+> **Note:** On the first start the model (~2 GB) is downloaded. The `api` container starts only after `ollama-init` has finished successfully, so the API is unreachable until then — follow progress with `docker compose logs -f ollama-init`.
 
 ---
 
@@ -139,6 +139,7 @@ curl -X POST http://localhost:8000/api/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
     "email": "john.doe@company.com",
+    "subject": "Monitor not working",
     "message": "My primary workstation monitor has failed and does not turn on."
   }'
 ```
@@ -146,9 +147,12 @@ curl -X POST http://localhost:8000/api/v1/messages \
 **Response:**
 ```json
 {
-  "status": "success"
+  "status": "success",
+  "routed_to": "it@example.com"
 }
 ```
+
+`routed_to` is the inbox the message was delivered to — `other@example.com` if the model could not classify it.
 
 ### 2. Authentication Problem (Routed to Help Desk)
 
@@ -157,6 +161,7 @@ curl -X POST http://localhost:8000/api/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
     "email": "alice.smith@company.com",
+    "subject": "ERP account locked",
     "message": "I entered an incorrect password multiple times and my ERP account is locked. Please unlock it."
   }'
 ```
@@ -168,6 +173,7 @@ curl -X POST http://localhost:8000/api/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
     "email": "robert.johnson@company.com",
+    "subject": "Annual leave balance",
     "message": "Could you please clarify the remaining annual leave allowance for this calendar year?"
   }'
 ```
@@ -179,6 +185,7 @@ curl -X POST http://localhost:8000/api/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
     "email": "emily.davis@company.com",
+    "subject": "Earnings certificate",
     "message": "Please generate and issue an official earnings certificate for my bank mortgage application."
   }'
 ```
@@ -188,8 +195,8 @@ curl -X POST http://localhost:8000/api/v1/messages \
 | Status | When |
 | :--- | :--- |
 | `200 OK` | Message delivered — to the chosen department, or to the fallback inbox `other@example.com` if the model couldn't classify it |
-| `422 Unprocessable Entity` | Invalid payload (bad email, message shorter than 3 or longer than 5000 characters) |
-| `503 Service Unavailable` | Ollama (`LLM unavailable`) or the SMTP server (`Mail server unavailable`) is down or timed out. Nothing is sent — retry later |
+| `422 Unprocessable Entity` | Invalid payload (missing field, bad email, message shorter than 3 or longer than 5000 characters) |
+| `503 Service Unavailable` | Ollama (`LLM unavailable`) or the SMTP server (`Mail server unavailable`) is down, timed out or returned an error. Nothing is sent — retry later |
 | `500 Internal Server Error` | Any other unexpected failure |
 
 ---
@@ -201,7 +208,25 @@ curl -X POST http://localhost:8000/api/v1/messages \
    - **Recipient (`To`):** Assigned department address (e.g., `it@example.com`).
    - **Sender (`From`):** `routing-agent@example.com`.
    - **Reply-To:** Original request sender address (e.g., `john.doe@company.com`).
+   - **Subject:** `[Routed] Subject:` followed by the request `subject`.
    - **Content:** Exact user message payload.
+
+---
+
+## Configuration
+
+Settings are read from environment variables (or a `.env` file in the working directory, see `.env.example`) by `app/core/config.py`:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `OLLAMA_HOST` | `http://ollama:11434` | Ollama server URL |
+| `MODEL_NAME` | `llama3.2:3b` | Ollama model used for classification |
+| `LLM_TIMEOUT` | `60` | Timeout for LLM requests, in seconds |
+| `SMTP_HOST` | `mailhog` | SMTP server hostname |
+| `SMTP_PORT` | `1025` | SMTP server port |
+| `SENDER_EMAIL` | `routing-agent@example.com` | `From` address of forwarded emails |
+
+> **Note:** `ollama-init` in `docker-compose.yml` always pulls `llama3.2:3b`. If you change `MODEL_NAME`, update the pull command there as well.
 
 ---
 
@@ -230,3 +255,13 @@ To run the API locally with hot-reloading for rapid iteration (requires Python 3
    ```bash
    uv run uvicorn app.main:app --reload --port 8000
    ```
+
+### Running Tests
+
+Tests live in `sample_tests/` and don't need Docker services running. `uv sync` installs `pytest` from the `dev` dependency group (it is not included in the Docker image):
+
+```bash
+uv run pytest
+```
+
+> **Note:** The Docker image installs the exact versions pinned in `uv.lock` (`uv sync --frozen`). After changing dependencies in `pyproject.toml`, run `uv lock` and commit the updated `uv.lock`, otherwise the image build fails.

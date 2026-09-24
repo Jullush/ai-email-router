@@ -16,11 +16,18 @@ class MailService:
             recipient:str,
             sender: str,
             message: str,
+            subject: str
     )-> None:
         """Forward a message to a department inbox.
 
         The email is sent from the routing service address, with the original
         sender set as Reply-To so the department can answer them directly.
+
+        Args:
+            recipient: Department inbox address.
+            sender: Original sender address, set as Reply-To.
+            message: Message body, forwarded verbatim.
+            subject: Original subject, prefixed with "[Routed]" in the forwarded email.
 
         Raises:
             MailDeliveryError: if the SMTP server is unreachable or rejects the message.
@@ -31,7 +38,7 @@ class MailService:
         email["From"] = settings.sender_email
         email["To"] = recipient
         email["Reply-To"] = sender
-        email["Subject"] = f"[Routed] Message from {sender}"
+        email["Subject"] = f"[Routed] Subject:{subject}"
         try:
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10.0) as server:
                 server.send_message(email)

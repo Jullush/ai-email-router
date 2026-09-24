@@ -20,8 +20,8 @@ services:
       echo 'Waiting for Ollama model';
       while ! curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done;
       echo 'Downloading llama3.2:3b...';
-      curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"llama3.2:3b\"}';
-      echo 'Model already here!';
+      curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"llama3.2:3b\"}' || exit 1
+      echo 'Deployment complete';
       "
 
   mailhog:

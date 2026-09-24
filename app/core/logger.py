@@ -2,7 +2,8 @@
 import logging
 import sys
 
-def get_logger(name: str = __name__, level: int = logging.INFO) -> logging.Logger:
+def get_logger(name: str = __name__,
+               level: int = logging.INFO) -> logging.Logger:
     """Return a logger that writes formatted records to stdout.
 
     Safe to call repeatedly: handlers are attached only once per logger name.
@@ -20,7 +21,6 @@ def get_logger(name: str = __name__, level: int = logging.INFO) -> logging.Logge
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    #standard output
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)

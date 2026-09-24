@@ -1,6 +1,7 @@
 """LLM routing agent: builds the LangChain agent and interprets its result."""
 from functools import cache
 from typing import Sequence
+import httpx
 
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
@@ -14,7 +15,8 @@ from app.agent.tools import EmailContext, send_email
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.models.models import RoutingResult, Department
-from app.services.mail_service import MailDeliveryError, MailService
+from app.services.mail_service import MailService
+from ollama import ResponseError as OllamaResponseError
 
 log = get_logger(__name__)
 
@@ -74,12 +76,12 @@ class RoutingAgent:
             middleware=[ToolCallLimitMiddleware(tool_name=send_email.name, run_limit=1)]
         )
 
-    def process(self, email: str, message: str) -> RoutingResult:
+    def process(self, email: str, message: str, subject:str) -> RoutingResult:
         """Route a single message to a department.
 
-        The LLM only sees the message and picks the department; the sender and
-        the original body are passed to the tool via runtime context, so they
-        are forwarded unchanged.
+        The LLM only sees the message body and picks the department; the sender,
+        subject and original body are passed to the tool via runtime context, so
+        they are forwarded unchanged.
 
         If the model fails to pick a valid department, the message is forwarded to
         the fallback inbox (Department.OTHER). Infrastructure failures (LLM or SMTP
@@ -88,25 +90,36 @@ class RoutingAgent:
         Args:
             email: Sender address, used as Reply-To.
             message: Message body to classify and forward.
+            subject: Subject of the message, used in the forwarded email (not
+                shown to the LLM).
 
         Returns:
-            RoutingResult with the department the message was sent to.
+            RoutingResult with the inbox the message was sent to; ``fallback`` is
+            True if it went to the fallback inbox.
 
         Raises:
-            LLMUnavailableError: if the LLM failed; nothing was sent.
-            MailDeliveryError: if the message could not be delivered over SMTP.
+            LLMUnavailableError: if Ollama could not be reached, timed out or
+                returned an error; nothing was sent.
+            MailDeliveryError: if the message could not be delivered over SMTP,
+                either by the tool or on the fallback path.
         """
+
+        _LLM_INFRA_ERRORS = (
+            httpx.TransportError,
+            ConnectionError,
+            OllamaResponseError,
+        )
+
         try:
             result = self._agent.invoke(
                 {"messages": [("user", message)]},
-                context=EmailContext(sender=email, message=message, mail_service=self._mail_service),
+                context=EmailContext(sender=email, message=message, subject=subject, mail_service=self._mail_service),
             )
-        except MailDeliveryError:
-            raise
-        except Exception as e:
+        except _LLM_INFRA_ERRORS as e:
             raise LLMUnavailableError("LLM invocation failed") from e
 
         recipient = _extract_recipient(result.get("messages", []))
+
         if recipient:
             return RoutingResult(
                 recipient=recipient,
@@ -115,7 +128,7 @@ class RoutingAgent:
 
         recipient = Department.OTHER.value
         log.warning("Agent did not route the message, falling back to %s", recipient)
-        self._mail_service.send_email(recipient=recipient, sender=email, message=message)
+        self._mail_service.send_email(recipient=recipient, sender=email, message=message, subject=subject)
 
         return RoutingResult(
             recipient=recipient,
