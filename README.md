@@ -4,6 +4,8 @@ Proof of Concept (PoC) that serves as an intelligent email router. The system pr
 classifies their intent using a locally hosted Large Language Model (LLM via Ollama),
 and forwards each message to the appropriate department using AI Agent Tool Calling.
 
+Llama3.2 model choice is dictated by its lightweight, better performance was achieved by using bigger models like qwen3:8b!
+
 ---
 
 ## Architecture Overview
@@ -115,7 +117,7 @@ The orchestration setup automatically:
 - Starts the **MailHog** SMTP server and Web UI.
 - Builds and runs the **FastAPI** application container.
 
-> **Note:** On the first start the model (~2 GB) is downloaded. The `api` container starts only after `ollama-init` has finished successfully, so the API is unreachable until then — follow progress with `docker compose logs -f ollama-init`.
+> **Note:** On the first start the model (~2 GB) is downloaded and then loaded into memory, so the first request doesn't pay the model load time. The `api` container starts only after `ollama-init` has finished successfully, so the API is unreachable until then — follow progress with `docker compose logs -f ollama-init`.
 
 ---
 
@@ -221,7 +223,7 @@ Settings are read from environment variables (or a `.env` file in the working di
 | :--- | :--- | :--- |
 | `OLLAMA_HOST` | `http://ollama:11434` | Ollama server URL |
 | `MODEL_NAME` | `llama3.2:3b` | Ollama model used for classification |
-| `LLM_TIMEOUT` | `60` | Timeout for LLM requests, in seconds |
+| `LLM_TIMEOUT` | `120` | Timeout for LLM requests, in seconds |
 | `SMTP_HOST` | `mailhog` | SMTP server hostname |
 | `SMTP_PORT` | `1025` | SMTP server port |
 | `SENDER_EMAIL` | `routing-agent@example.com` | `From` address of forwarded emails |

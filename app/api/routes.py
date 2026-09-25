@@ -2,9 +2,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.agent.agent import get_agent, LLMUnavailableError, RoutingAgent
 from app.services.mail_service import MailDeliveryError
-from app.models.models import MessageRequest, ProcessResponse
+from app.models.models import MessageRequest, ProcessResponse, RoutingResult
 from app.core.logger import get_logger
-from app.models.models import RoutingResult
 
 log = get_logger(__name__)
 router = APIRouter()

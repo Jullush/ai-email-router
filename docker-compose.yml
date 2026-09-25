@@ -20,7 +20,9 @@ services:
       echo 'Waiting for Ollama model';
       while ! curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done;
       echo 'Downloading llama3.2:3b...';
-      curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"llama3.2:3b\"}' || exit 1
+      curl -fsS -X POST http://ollama:11434/api/pull -d '{\"name\": \"llama3.2:3b\", \"stream\": false}' || exit 1;
+      echo 'Loading llama3.2:3b into memory...';
+      curl -fsS -X POST http://ollama:11434/api/generate -d '{\"model\": \"llama3.2:3b\", \"keep_alive\": -1}' || exit 1;
       echo 'Deployment complete';
       "
 
@@ -43,6 +45,7 @@ services:
       - SMTP_HOST=mailhog
       - SMTP_PORT=1025
       - MODEL_NAME=llama3.2:3b
+      - LLM_TIMEOUT=120
     depends_on:
       ollama-init:
         condition: service_completed_successfully

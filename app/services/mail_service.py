@@ -38,7 +38,7 @@ class MailService:
         email["From"] = settings.sender_email
         email["To"] = recipient
         email["Reply-To"] = sender
-        email["Subject"] = f"[Routed] Subject:{subject}"
+        email["Subject"] = f"[Routed] Subject: {subject}"
         try:
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10.0) as server:
                 server.send_message(email)

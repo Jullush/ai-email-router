@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     ollama_host: str = "http://ollama:11434"
     model_name: str = "llama3.2:3b"
     sender_email: EmailStr = "routing-agent@example.com"
-    llm_timeout: float = Field(default=60.0, gt=0)
+    llm_timeout: float = Field(default=120.0, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",
