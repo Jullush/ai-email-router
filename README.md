@@ -4,7 +4,13 @@ Proof of Concept (PoC) that serves as an intelligent email router. The system pr
 classifies their intent using a locally hosted Large Language Model (LLM via Ollama),
 and forwards each message to the appropriate department using AI Agent Tool Calling.
 
-Llama3.2 model choice is dictated by its lightweight, better performance was achieved by using bigger models like qwen3:8b!
+Important info:
+
+> Llama3.2 model choice is dictated by its lightweight, better performance was achieved by using bigger models like qwen3:8b!
+
+> Main goal was to allow LLM to choose model on its own with its ability for tool calling.
+
+> Added small test sample. 
 
 ---
 
